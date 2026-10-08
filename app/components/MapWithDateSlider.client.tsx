@@ -186,6 +186,44 @@ function supportsNativeFullscreen(el: HTMLElement): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Click tracking
+// ---------------------------------------------------------------------------
+
+// GA4 rejects parameter values longer than 100 characters
+function truncate(val: string, max = 100): string {
+  return val.length > max ? `${val.slice(0, max - 1)}…` : val;
+}
+
+/**
+ * Report a map interaction. Dispatches a `canopy-map:<name>` CustomEvent on
+ * window (full detail) and, when Google Analytics is loaded, sends a GA4
+ * event with the flat, length-limited parameters.
+ */
+function trackMapEvent(
+  name: string,
+  detail: Record<string, unknown>,
+  gaParams: Record<string, string | number | boolean>
+): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(`canopy-map:${name}`, { detail }));
+  const gtag = (window as any).gtag;
+  if (typeof gtag === "function") gtag("event", `map_${name.replace(/-/g, "_")}`, gaParams);
+}
+
+function markerSummary(m: EnrichedMarker) {
+  return {
+    id: m.id,
+    title: m.title,
+    href: m.href,
+    lat: m.lat,
+    lng: m.lng,
+    dateBuilt: m.dateBuilt,
+    dateRazed: m.standing ? null : m.dateRazed,
+    standing: m.standing,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Year helpers
 // ---------------------------------------------------------------------------
 
@@ -233,6 +271,9 @@ export default function MapWithDateSlider({
   const clusterButtonRef = useRef<HTMLAnchorElement | null>(null);
   const toggleFullscreenRef = useRef<() => void>(() => {});
   const fullscreenButtonRef = useRef<HTMLAnchorElement | null>(null);
+  // Current slider range, read by the marker click handlers
+  const yearRangeRef = useRef<{ start: number | null; end: number | null }>({ start: null, end: null });
+  yearRangeRef.current = { start: startYear, end: endYear };
 
   toggleFullscreenRef.current = () => {
     const root = rootRef.current;
@@ -610,10 +651,59 @@ export default function MapWithDateSlider({
           </a>
         </div>`;
 
-      L.marker([m.lat, m.lng], { icon })
-        .bindPopup(popupContent)
-        .addTo(group);
+      const marker = L.marker([m.lat, m.lng], { icon }).bindPopup(popupContent);
+      marker.building = m;
+      marker.on("click", () => {
+        const { start, end } = yearRangeRef.current;
+        trackMapEvent(
+          "marker-click",
+          { marker: markerSummary(m), zoom: map.getZoom(), startYear: start, endYear: end },
+          {
+            building_id: truncate(m.id),
+            building_title: truncate(m.title),
+            building_href: truncate(m.href),
+            map_zoom: map.getZoom(),
+            start_year: start ?? "",
+            end_year: end ?? "",
+          }
+        );
+      });
+      marker.addTo(group);
     });
+
+    if (useCluster) {
+      group.on("clusterclick", (e: any) => {
+        const c = e.layer;
+        const buildings: EnrichedMarker[] = c
+          .getAllChildMarkers()
+          .map((mk: any) => mk.building)
+          .filter(Boolean);
+        const center = c.getLatLng();
+        const bounds = c.getBounds();
+        const { start, end } = yearRangeRef.current;
+        trackMapEvent(
+          "cluster-click",
+          {
+            count: c.getChildCount(),
+            markers: buildings.map(markerSummary),
+            center: { lat: center.lat, lng: center.lng },
+            bounds: bounds.toBBoxString(),
+            zoom: map.getZoom(),
+            startYear: start,
+            endYear: end,
+          },
+          {
+            cluster_size: c.getChildCount(),
+            cluster_titles: truncate(buildings.map((b) => b.title).join("; ")),
+            cluster_lat: Number(center.lat.toFixed(5)),
+            cluster_lng: Number(center.lng.toFixed(5)),
+            map_zoom: map.getZoom(),
+            start_year: start ?? "",
+            end_year: end ?? "",
+          }
+        );
+      });
+    }
 
     group.addTo(map);
     clusterGroupRef.current = group;
