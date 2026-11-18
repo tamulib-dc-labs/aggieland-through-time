@@ -275,6 +275,53 @@ function escapeHtml(val: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+// ---------------------------------------------------------------------------
+// Shareable view state in the URL hash
+//   #years=1876-1933&map=17/30.61500/-96.34100&overlays=66a196ddd627845c&base=2&opacity=60
+// Overlays are keyed by the last segment of their annotation URL so links
+// keep working if the list is reordered. Defaults are left out of the hash.
+// ---------------------------------------------------------------------------
+
+type HashState = {
+  start?: number;
+  end?: number;
+  zoom?: number;
+  lat?: number;
+  lng?: number;
+  overlays?: string[];
+  base?: number;
+  opacity?: number;
+};
+
+const LINK_ICON = `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.5 9.5a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2L8 3.8M9.5 6.5a3 3 0 0 0-4.2 0L2.7 9.1a3 3 0 0 0 4.2 4.2L8 12.2" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>`;
+const CHECK_ICON = `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 8.5 6 12l7.5-8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+function annotationKey(url: string): string {
+  return url.split("/").filter(Boolean).pop() ?? url;
+}
+
+function readHash(): HashState {
+  if (typeof window === "undefined") return {};
+  const p = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const num = (v: string | undefined) => (v != null && v !== "" && isFinite(Number(v)) ? Number(v) : undefined);
+  const out: HashState = {};
+  const years = p.get("years")?.match(/^(\d{4})-(\d{4})$/);
+  if (years) {
+    out.start = Number(years[1]);
+    out.end = Number(years[2]);
+  }
+  const [z, lat, lng] = (p.get("map") ?? "").split("/").map((v) => num(v));
+  if (z !== undefined && lat !== undefined && lng !== undefined && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+    Object.assign(out, { zoom: z, lat, lng });
+  }
+  const overlays = p.get("overlays");
+  if (overlays) out.overlays = overlays.split(",").filter(Boolean);
+  out.base = num(p.get("base") ?? undefined);
+  const opacity = num(p.get("opacity") ?? undefined);
+  if (opacity !== undefined) out.opacity = Math.min(100, Math.max(0, Math.round(opacity)));
+  return out;
+}
+
 function yearsLabel(m: EnrichedMarker): string {
   if (m.dateBuilt === null) return "Date unknown";
   return `${m.dateBuilt} – ${m.standing ? "Present" : m.dateRazed}`;
@@ -323,8 +370,17 @@ export default function MapWithDateSlider({
   const [clustered, setClustered] = useState(true);
   // Historic imagery: whether any overlay is on, and its opacity (0–100)
   const [overlayVisible, setOverlayVisible] = useState(false);
-  const [overlayOpacity, setOverlayOpacity] = useState(100);
+  // The view the page was opened with (read once, before anything rewrites it)
+  const initialHashRef = useRef<HashState | null>(null);
+  if (initialHashRef.current === null) initialHashRef.current = readHash();
+  const [overlayOpacity, setOverlayOpacity] = useState(initialHashRef.current.opacity ?? 100);
+  const opacityRef = useRef(overlayOpacity);
+  opacityRef.current = overlayOpacity;
   const georefPanesRef = useRef<string[]>([]);
+  // For writing the hash: overlays by key, the current base layer, a debounce timer
+  const georefByKeyRef = useRef<Map<string, L.Layer>>(new Map());
+  const baseIndexRef = useRef(0);
+  const hashTimerRef = useRef<number | null>(null);
   // Building finder: search text, list open, markers by id, and a building to
   // fly to once the markers are rebuilt (after the date range widens)
   const [query, setQuery] = useState("");
@@ -487,11 +543,59 @@ export default function MapWithDateSlider({
     };
   }, [markers]);
 
-  // ── 4. Init slider to full span ───────────────────────────────────────
+  // ── 4. Init slider: from the URL hash if given, else the full span ────
   useEffect(() => {
-    if (markers.length && startYear === null) setStartYear(minYear);
-    if (markers.length && endYear === null) setEndYear(maxYear);
+    if (!markers.length) return;
+    const h = initialHashRef.current ?? {};
+    const clamp = (y: number) => Math.min(maxYear, Math.max(minYear, y));
+    const hasYears = h.start !== undefined && h.end !== undefined && h.start <= h.end;
+    if (startYear === null) setStartYear(hasYears ? clamp(h.start) : minYear);
+    if (endYear === null) setEndYear(hasYears ? clamp(h.end) : maxYear);
   }, [markers, minYear, maxYear, startYear, endYear]);
+
+  // ── 4b. Keep the URL hash in step with the view ───────────────────────
+  // replaceState, so moving the map doesn't fill the back button's history
+  function writeHash(): void {
+    const map = mapInstanceRef.current;
+    if (!map || typeof window === "undefined") return;
+    const parts: string[] = [];
+    const { start, end } = yearRangeRef.current;
+    if (start !== null && end !== null && (start !== minYearRef.current || end !== maxYearRef.current)) {
+      parts.push(`years=${start}-${end}`);
+    }
+    const c = map.getCenter();
+    const z = Math.round(map.getZoom() * 100) / 100;
+    parts.push(`map=${z}/${c.lat.toFixed(5)}/${c.lng.toFixed(5)}`);
+    const on = [...georefByKeyRef.current].filter(([, l]) => map.hasLayer(l)).map(([k]) => k);
+    if (on.length) parts.push(`overlays=${on.join(",")}`);
+    if (baseIndexRef.current > 0) parts.push(`base=${baseIndexRef.current}`);
+    if (opacityRef.current !== 100) parts.push(`opacity=${opacityRef.current}`);
+    const hash = `#${parts.join("&")}`;
+    if (hash !== window.location.hash) {
+      history.replaceState(history.state, "", `${window.location.pathname}${window.location.search}${hash}`);
+    }
+  }
+
+  function scheduleHashWrite(): void {
+    if (hashTimerRef.current !== null) window.clearTimeout(hashTimerRef.current);
+    hashTimerRef.current = window.setTimeout(() => {
+      hashTimerRef.current = null;
+      writeHash();
+    }, 250);
+  }
+  const scheduleHashWriteRef = useRef(scheduleHashWrite);
+  scheduleHashWriteRef.current = scheduleHashWrite;
+  const writeHashRef = useRef(writeHash);
+  writeHashRef.current = writeHash;
+
+  const minYearRef = useRef(minYear);
+  const maxYearRef = useRef(maxYear);
+  minYearRef.current = minYear;
+  maxYearRef.current = maxYear;
+
+  useEffect(() => {
+    if (startYear !== null && endYear !== null) scheduleHashWriteRef.current();
+  }, [startYear, endYear, overlayOpacity]);
 
   // ── 5. Filter markers ─────────────────────────────────────────────────
   const filteredMarkers = useMemo(() => {
@@ -518,6 +622,12 @@ export default function MapWithDateSlider({
     // Tile layers
     const layers = tileLayers ?? [];
     const baseMapLayers: Record<string, L.TileLayer> = {};
+    const hash = initialHashRef.current ?? {};
+    const startBase =
+      hash.base !== undefined && Number.isInteger(hash.base) && hash.base >= 0 && hash.base < layers.length
+        ? hash.base
+        : 0;
+    baseIndexRef.current = startBase;
     if (layers.length > 0) {
       layers.forEach((tl, i) => {
         const layer = L.tileLayer(tl.url, {
@@ -525,9 +635,13 @@ export default function MapWithDateSlider({
           maxZoom: tl.maxZoom ?? 19,
         });
         baseMapLayers[tl.name] = layer;
-        if (i === 0) layer.addTo(map);
+        if (i === startBase) layer.addTo(map);
       });
     }
+    map.on("baselayerchange", (e: any) => {
+      baseIndexRef.current = Math.max(0, layers.findIndex((tl) => tl.name === e.name));
+      scheduleHashWriteRef.current();
+    });
 
     // Georeferenced overlays sit above every base layer (tilePane, z 200) but
     // below vector overlays (400) and markers / clusters (600). Each gets its
@@ -540,6 +654,9 @@ export default function MapWithDateSlider({
       pane.style.pointerEvents = "none";
       georefLayers[ga.name] = new GeorefToggleLayer(ga.url, paneName);
     });
+    georefByKeyRef.current = new Map(
+      (georefAnnotations ?? []).map((ga) => [annotationKey(ga.url), georefLayers[ga.name]])
+    );
     const georefList = Object.values(georefLayers);
     georefPanesRef.current = (georefAnnotations ?? []).map((_, i) => `georef-${i}`);
     if (georefList.length > 0) {
@@ -635,8 +752,82 @@ export default function MapWithDateSlider({
       new OverlayControl().addTo(map);
     }
 
-    // Default view while data loads
-    map.setView([30.618, -96.336], 15);
+    // Copy a link to this view (the URL hash already holds it)
+    const ShareControl = L.Control.extend({
+      options: { position: "topleft" },
+      onAdd() {
+        const bar = L.DomUtil.create("div", "leaflet-bar leaflet-control");
+        const btn = L.DomUtil.create("a", "", bar) as HTMLAnchorElement;
+        btn.href = "#";
+        btn.setAttribute("role", "button");
+        btn.style.display = "flex";
+        btn.style.alignItems = "center";
+        btn.style.justifyContent = "center";
+        btn.style.color = "#500000";
+        const setState = (copied: boolean) => {
+          const label = copied ? "Link copied" : "Copy link to this view";
+          btn.innerHTML = copied ? CHECK_ICON : LINK_ICON;
+          btn.title = label;
+          btn.setAttribute("aria-label", label);
+        };
+        setState(false);
+        let resetTimer: number | undefined;
+        L.DomEvent.disableClickPropagation(bar);
+        L.DomEvent.on(btn, "click", (e) => {
+          L.DomEvent.preventDefault(e);
+          // Flush any pending update so the copied link matches the screen
+          if (hashTimerRef.current !== null) {
+            window.clearTimeout(hashTimerRef.current);
+            hashTimerRef.current = null;
+          }
+          writeHashRef.current();
+          const url = window.location.href;
+          const done = () => {
+            setState(true);
+            window.clearTimeout(resetTimer);
+            resetTimer = window.setTimeout(() => setState(false), 2000);
+          };
+          // Clipboard blocked (e.g. insecure page): show the link to copy by hand.
+          // Some embedded browsers have no prompt(), so don't let that throw.
+          const fallback = () => {
+            try {
+              window.prompt("Copy this link:", url);
+            } catch {
+              /* the address bar already shows the link */
+            }
+          };
+          if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(url).then(done, fallback);
+          } else {
+            fallback();
+          }
+          trackMapEvent("share-link-copy", { url }, { share_url: truncate(url) });
+        });
+        return bar;
+      },
+    });
+    new ShareControl().addTo(map);
+
+    // Start from the URL hash's view if it has one; otherwise a default view
+    // while data loads, replaced by fitting the markers once they arrive
+    if (hash.zoom !== undefined && hash.lat !== undefined && hash.lng !== undefined) {
+      map.setView([hash.lat, hash.lng], hash.zoom);
+      initialBoundsSetRef.current = true;
+    } else {
+      map.setView([30.618, -96.336], 15);
+    }
+
+    // Overlays named in the hash
+    (hash.overlays ?? []).forEach((key) => {
+      const layer = georefByKeyRef.current.get(key);
+      if (layer) map.addLayer(layer);
+    });
+
+    map.on("moveend overlayadd overlayremove layeradd layerremove", (e: any) => {
+      // Marker layers come and go with the slider; only overlays matter here
+      if ((e.type === "layeradd" || e.type === "layerremove") && !georefList.includes(e.layer)) return;
+      scheduleHashWriteRef.current();
+    });
 
     mapInstanceRef.current = map;
 
