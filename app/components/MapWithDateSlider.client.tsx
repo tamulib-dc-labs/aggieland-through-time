@@ -94,6 +94,28 @@ function ensureLeafletCss(): void {
     }
     .cdrs input[type=range]::-webkit-slider-runnable-track { background: transparent; }
     .cdrs input[type=range]::-moz-range-track { background: transparent; }
+
+    /* Historic imagery opacity: the track fades from clear to maroon and the
+       thumb is the inverse of the date thumbs, so the two read differently */
+    .georef-opacity input[type=range] {
+      -webkit-appearance: none; appearance: none;
+      height: 8px; border-radius: 4px; margin: 0; cursor: pointer;
+      background: linear-gradient(to right, rgba(80,0,0,.08), #500000);
+      border: 1px solid rgba(80,0,0,.25);
+    }
+    .georef-opacity input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: #fff; border: 3px solid #500000;
+      box-shadow: 0 1px 4px rgba(0,0,0,.35);
+    }
+    .georef-opacity input[type=range]::-moz-range-thumb {
+      width: 16px; height: 16px; border-radius: 50%; box-sizing: border-box;
+      background: #fff; border: 3px solid #500000;
+      box-shadow: 0 1px 4px rgba(0,0,0,.35);
+    }
+    .georef-opacity input[type=range]::-moz-range-track { background: transparent; }
+    .georef-opacity input[type=range]:focus-visible { outline: 2px solid #500000; outline-offset: 3px; }
   `;
   document.head.appendChild(style);
 }
@@ -280,6 +302,10 @@ export default function MapWithDateSlider({
   const [fullscreen, setFullscreen] = useState(false);
   const [pseudoFullscreen, setPseudoFullscreen] = useState(false);
   const [clustered, setClustered] = useState(true);
+  // Historic imagery: whether any overlay is on, and its opacity (0–100)
+  const [overlayVisible, setOverlayVisible] = useState(false);
+  const [overlayOpacity, setOverlayOpacity] = useState(100);
+  const georefPanesRef = useRef<string[]>([]);
   const clusterButtonRef = useRef<HTMLAnchorElement | null>(null);
   const toggleFullscreenRef = useRef<() => void>(() => {});
   const fullscreenButtonRef = useRef<HTMLAnchorElement | null>(null);
@@ -490,6 +516,13 @@ export default function MapWithDateSlider({
       georefLayers[ga.name] = new GeorefToggleLayer(ga.url, paneName);
     });
     const georefList = Object.values(georefLayers);
+    georefPanesRef.current = (georefAnnotations ?? []).map((_, i) => `georef-${i}`);
+    if (georefList.length > 0) {
+      // Show the opacity slider only while some historic imagery is on
+      map.on("layeradd layerremove", () =>
+        setOverlayVisible(georefList.some((l) => map.hasLayer(l)))
+      );
+    }
 
     if (layers.length > 1 || georefList.length > 0) {
       L.control.layers(baseMapLayers, georefLayers).addTo(map);
@@ -591,6 +624,17 @@ export default function MapWithDateSlider({
       initialBoundsSetRef.current = false;
     };
   }, [mapReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 6b. Historic imagery opacity ──────────────────────────────────────
+  // Set on each overlay's pane, so it also applies to overlays not yet loaded
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    georefPanesRef.current.forEach((name) => {
+      const pane = map.getPane(name);
+      if (pane) pane.style.opacity = String(overlayOpacity / 100);
+    });
+  }, [overlayOpacity, mapReady]);
 
   // ── 7. Sync markers to map ────────────────────────────────────────────
   useEffect(() => {
@@ -884,6 +928,51 @@ export default function MapWithDateSlider({
           <span>{ey - sy} year span</span>
           <span style={{ fontWeight: 600, color: "#000", fontSize: "0.85rem" }}>{ey}</span>
         </div>
+
+        {/* Historic imagery opacity, shown while any overlay is on */}
+        {overlayVisible && (
+          <div
+            className="georef-opacity"
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: "0.4rem 0.6rem",
+              fontFamily: "var(--open-sans)",
+              fontSize: "0.8rem",
+              color: "#500000",
+              background: "#fff",
+              border: "1px solid #d6cfc4",
+              borderLeft: "4px solid #500000",
+              borderRadius: 4,
+              padding: "0.4rem 0.75rem",
+              marginTop: "0.35rem",
+            }}
+          >
+            <span
+              style={{ display: "flex", flexShrink: 0 }}
+              dangerouslySetInnerHTML={{ __html: OVERLAY_ICON }}
+            />
+            <label htmlFor="georef-opacity" style={{ whiteSpace: "nowrap", fontWeight: 600 }}>
+              Historic imagery opacity
+            </label>
+            <input
+              id="georef-opacity"
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={overlayOpacity}
+              onChange={(e) => setOverlayOpacity(Number(e.target.value))}
+              aria-valuetext={`${overlayOpacity}%`}
+              // Wraps onto its own line when the row is too narrow (phones)
+              style={{ flex: "1 1 180px", minWidth: 0 }}
+            />
+            <span style={{ fontWeight: 700, minWidth: "4ch", textAlign: "right" }}>
+              {overlayOpacity}%
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
