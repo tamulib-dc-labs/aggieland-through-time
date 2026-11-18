@@ -227,6 +227,18 @@ function markerSummary(m: EnrichedMarker) {
 // Year helpers
 // ---------------------------------------------------------------------------
 
+// Still-standing buildings run to the current year
+const CURRENT_YEAR = new Date().getFullYear();
+
+function escapeHtml(val: unknown): string {
+  return String(val ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function parseYear(val: string | null | undefined): number | null {
   if (!val) return null;
   const m = String(val).match(/\d{4}/);
@@ -371,10 +383,11 @@ export default function MapWithDateSlider({
           const enriched: EnrichedMarker[] = [];
           navData.manifests.forEach((manifest) => {
             const meta = hrefToMeta.get(manifest.href);
-            const dateBuilt = parseYear(meta?.[0]) ?? 2025;
+            // Undated buildings keep dateBuilt = null and are shown at every slider position
+            const dateBuilt = parseYear(meta?.[0]);
             const razedRaw = meta?.[1];
             const standing = !razedRaw || razedRaw.toLowerCase() === "present";
-            const dateRazed = standing ? 2025 : (parseYear(razedRaw) ?? 2025);
+            const dateRazed = standing ? CURRENT_YEAR : (parseYear(razedRaw) ?? CURRENT_YEAR);
 
             manifest.features.forEach((feature, i) => {
               enriched.push({
@@ -433,6 +446,7 @@ export default function MapWithDateSlider({
   const filteredMarkers = useMemo(() => {
     if (!markers.length || startYear === null || endYear === null) return markers;
     return markers.filter(({ dateBuilt, dateRazed }) => {
+      if (dateBuilt === null) return true;
       if (dateBuilt > endYear) return false;
       if (dateRazed < startYear) return false;
       return true;
@@ -617,9 +631,11 @@ export default function MapWithDateSlider({
 
     const bp = typeof window !== "undefined" ? ((window as any).CANOPY_BASE_PATH || "") : "";
     filteredMarkers.forEach((m) => {
+      const title = escapeHtml(m.title);
+      const thumb = escapeHtml(m.thumbnail);
       const icon = L.divIcon({
         className: "",
-        html: `<img src="${m.thumbnail}" style="
+        html: `<img src="${thumb}" style="
           width:32px;height:32px;
           border-radius:50%;
           object-fit:cover;
@@ -634,20 +650,20 @@ export default function MapWithDateSlider({
 
       const popupContent = `
         <div style="width:200px">
-          <a href="${bp}${m.href}" style="text-decoration:none;color:inherit">
-            <img src="${m.thumbnail}"
+          <a href="${escapeHtml(bp + m.href)}" style="text-decoration:none;color:inherit">
+            <img src="${thumb}"
                  style="width:100%;height:130px;object-fit:cover;display:block"
-                 alt="${m.title}" />
+                 alt="${title}" />
             <p style="margin:6px 4px 4px;font-size:0.85rem;font-weight:600;line-height:1.3">
-              ${m.title}
+              ${title}
             </p>
-            ${
-              m.dateBuilt
-                ? `<p style="margin:0 4px 6px;font-size:0.75rem;color:#666">
-                     ${m.dateBuilt} – ${m.standing ? "Present" : m.dateRazed}
-                   </p>`
-                : ""
-            }
+            <p style="margin:0 4px 6px;font-size:0.75rem;color:#666">
+              ${
+                m.dateBuilt !== null
+                  ? `${m.dateBuilt} – ${m.standing ? "Present" : m.dateRazed}`
+                  : "Date unknown"
+              }
+            </p>
           </a>
         </div>`;
 
