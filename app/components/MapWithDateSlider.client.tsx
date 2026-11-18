@@ -322,6 +322,10 @@ function readHash(): HashState {
   return out;
 }
 
+// Visually hidden text inside Leaflet's HTML strings
+const SR_ONLY_INLINE =
+  "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0";
+
 function yearsLabel(m: EnrichedMarker): string {
   if (m.dateBuilt === null) return "Date unknown";
   return `${m.dateBuilt} – ${m.standing ? "Present" : m.dateRazed}`;
@@ -881,7 +885,7 @@ export default function MapWithDateSlider({
                 color:#fff;font-weight:700;font-size:13px;line-height:1;
                 box-shadow:0 2px 8px rgba(0,0,0,.45);
                 border:2px solid rgba(255,255,255,.35);
-              ">${n}</div>`,
+              ">${n}<span style="${SR_ONLY_INLINE}"> buildings, zoom in to see them</span></div>`,
               iconSize: L.point(40, 40),
               iconAnchor: [20, 20],
             });
@@ -894,6 +898,9 @@ export default function MapWithDateSlider({
     filteredMarkers.forEach((m) => {
       const title = escapeHtml(m.title);
       const thumb = escapeHtml(m.thumbnail);
+      // Leaflet makes the marker a focusable role="button" <div>; the
+      // thumbnail's alt text is its accessible name (Leaflet's own `alt`
+      // option only applies to image icons, not divIcons)
       const icon = L.divIcon({
         className: "",
         html: `<img src="${thumb}" style="
@@ -903,7 +910,7 @@ export default function MapWithDateSlider({
           border:2px solid #500000;
           box-shadow:0 1px 5px rgba(0,0,0,.45);
           display:block;
-        " alt="" />`,
+        " alt="${title}, ${escapeHtml(yearsLabel(m))}" />`,
         iconSize: [32, 32],
         iconAnchor: [16, 16],
         popupAnchor: [0, -20],
@@ -924,7 +931,8 @@ export default function MapWithDateSlider({
           </a>
         </div>`;
 
-      const marker = L.marker([m.lat, m.lng], { icon }).bindPopup(popupContent);
+      // `title` gives the hover tooltip
+      const marker = L.marker([m.lat, m.lng], { icon, title: m.title }).bindPopup(popupContent);
       marker.building = m;
       markerByIdRef.current.set(m.id, marker);
       marker.on("click", () => {
@@ -1175,7 +1183,8 @@ export default function MapWithDateSlider({
               setStartYear(Math.min(v, ey));
             }}
             style={{ zIndex: sy >= ey ? 2 : 1 }}
-            aria-label={`Start year: ${sy}`}
+            aria-label="Start year"
+            aria-valuetext={String(sy)}
           />
           <input
             type="range"
@@ -1187,7 +1196,8 @@ export default function MapWithDateSlider({
               setEndYear(Math.max(v, sy));
             }}
             style={{ zIndex: sy < ey ? 2 : 1 }}
-            aria-label={`End year: ${ey}`}
+            aria-label="End year"
+            aria-valuetext={`${ey}, ${count} of ${total} buildings shown`}
           />
         </div>
 
