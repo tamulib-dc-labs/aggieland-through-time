@@ -116,6 +116,20 @@ function ensureLeafletCss(): void {
     }
     .georef-opacity input[type=range]::-moz-range-track { background: transparent; }
     .georef-opacity input[type=range]:focus-visible { outline: 2px solid #500000; outline-offset: 3px; }
+
+    /* Building finder list */
+    .building-finder input[type=search]:focus-visible { outline: 2px solid #500000; outline-offset: 1px; }
+    .building-finder .bf-item {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem;
+      width: 100%; padding: 0.4rem 0.6rem; border: 0; border-top: 1px solid #f0ece6;
+      background: transparent; font: inherit; font-size: 0.85rem; color: #000;
+      text-align: left; cursor: pointer;
+    }
+    .building-finder .bf-item:hover, .building-finder .bf-item:focus-visible {
+      background: #f5f1eb; color: #500000; outline: none;
+    }
+    .building-finder .bf-hidden { color: #666; }
+    .building-finder .bf-years { flex-shrink: 0; font-size: 0.75rem; color: #666; }
   `;
   document.head.appendChild(style);
 }
@@ -261,6 +275,11 @@ function escapeHtml(val: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+function yearsLabel(m: EnrichedMarker): string {
+  if (m.dateBuilt === null) return "Date unknown";
+  return `${m.dateBuilt} – ${m.standing ? "Present" : m.dateRazed}`;
+}
+
 function parseYear(val: string | null | undefined): number | null {
   if (!val) return null;
   const m = String(val).match(/\d{4}/);
@@ -306,6 +325,12 @@ export default function MapWithDateSlider({
   const [overlayVisible, setOverlayVisible] = useState(false);
   const [overlayOpacity, setOverlayOpacity] = useState(100);
   const georefPanesRef = useRef<string[]>([]);
+  // Building finder: search text, list open, markers by id, and a building to
+  // fly to once the markers are rebuilt (after the date range widens)
+  const [query, setQuery] = useState("");
+  const [listOpen, setListOpen] = useState(false);
+  const markerByIdRef = useRef<Map<string, any>>(new Map());
+  const pendingFlyRef = useRef<string | null>(null);
   const clusterButtonRef = useRef<HTMLAnchorElement | null>(null);
   const toggleFullscreenRef = useRef<() => void>(() => {});
   const fullscreenButtonRef = useRef<HTMLAnchorElement | null>(null);
@@ -674,6 +699,7 @@ export default function MapWithDateSlider({
       : L.layerGroup();
 
     const bp = typeof window !== "undefined" ? ((window as any).CANOPY_BASE_PATH || "") : "";
+    markerByIdRef.current = new Map();
     filteredMarkers.forEach((m) => {
       const title = escapeHtml(m.title);
       const thumb = escapeHtml(m.thumbnail);
@@ -702,17 +728,14 @@ export default function MapWithDateSlider({
               ${title}
             </p>
             <p style="margin:0 4px 6px;font-size:0.75rem;color:#666">
-              ${
-                m.dateBuilt !== null
-                  ? `${m.dateBuilt} – ${m.standing ? "Present" : m.dateRazed}`
-                  : "Date unknown"
-              }
+              ${yearsLabel(m)}
             </p>
           </a>
         </div>`;
 
       const marker = L.marker([m.lat, m.lng], { icon }).bindPopup(popupContent);
       marker.building = m;
+      markerByIdRef.current.set(m.id, marker);
       marker.on("click", () => {
         const { start, end } = yearRangeRef.current;
         trackMapEvent(
@@ -778,7 +801,71 @@ export default function MapWithDateSlider({
         initialBoundsSetRef.current = true;
       }
     }
+
+    // A building picked from outside the date range: fly once it's on the map
+    const pending = pendingFlyRef.current;
+    if (pending && markerByIdRef.current.has(pending)) {
+      pendingFlyRef.current = null;
+      flyToBuilding(pending);
+    }
   }, [filteredMarkers, mapReady, cluster, clustered, maxClusterRadius, disableClusteringAtZoom]);
+
+  // ── 8. Building finder ────────────────────────────────────────────────
+
+  /** Zoom to a building's marker (out of its cluster) and open its popup. */
+  function flyToBuilding(id: string): void {
+    const map = mapInstanceRef.current;
+    const marker = markerByIdRef.current.get(id);
+    if (!map || !marker) return;
+    mapContainerRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const group = clusterGroupRef.current;
+    if (group && typeof group.zoomToShowLayer === "function") {
+      group.zoomToShowLayer(marker, () => marker.openPopup());
+    } else {
+      // setView, not flyTo: the Allmaps layer can't animate multi-level zooms
+      map.setView(marker.getLatLng(), Math.max(map.getZoom(), 18));
+      marker.openPopup();
+    }
+  }
+
+  function selectBuilding(m: EnrichedMarker, inRange: boolean): void {
+    trackMapEvent(
+      "building-search-select",
+      { marker: markerSummary(m), query, inRange },
+      {
+        building_id: truncate(m.id),
+        building_title: truncate(m.title),
+        search_query: truncate(query),
+        in_range: inRange,
+      }
+    );
+    if (inRange) {
+      flyToBuilding(m.id);
+      return;
+    }
+    // Widen the date range just enough to include it; the marker sync effect
+    // then flies to it
+    // (a building shows when dateBuilt <= endYear and dateRazed >= startYear;
+    // undated ones are always shown, so never land here)
+    pendingFlyRef.current = m.id;
+    if (m.dateBuilt !== null) setEndYear((e) => Math.max(e ?? m.dateBuilt, m.dateBuilt));
+    if (m.dateRazed !== null) setStartYear((s) => Math.min(s ?? m.dateRazed, m.dateRazed));
+  }
+
+  const q = query.trim().toLowerCase();
+  const byTitle = (a: EnrichedMarker, b: EnrichedMarker) => a.title.localeCompare(b.title);
+  const visibleMatches = useMemo(
+    () => filteredMarkers.filter((m) => !q || m.title.toLowerCase().includes(q)).sort(byTitle),
+    [filteredMarkers, q]
+  );
+  const hiddenMatches = useMemo(() => {
+    if (!q) return [];
+    const shown = new Set(filteredMarkers.map((m) => m.id));
+    return markers
+      .filter((m) => !shown.has(m.id) && m.title.toLowerCase().includes(q))
+      .sort(byTitle);
+  }, [markers, filteredMarkers, q]);
+  const showList = listOpen || q.length > 0;
 
   // ── Render ─────────────────────────────────────────────────────────────
 
@@ -973,7 +1060,142 @@ export default function MapWithDateSlider({
             </span>
           </div>
         )}
+
+        {/* Building finder: search box plus a collapsible list of buildings */}
+        <div
+          className="building-finder"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.35rem",
+            marginTop: "0.35rem",
+            fontFamily: "var(--open-sans)",
+            fontSize: "0.8rem",
+          }}
+        >
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            <label htmlFor="building-search" className="sr-only" style={SR_ONLY}>
+              Find a building
+            </label>
+            <input
+              id="building-search"
+              type="search"
+              placeholder="Find a building…"
+              autoComplete="off"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (visibleMatches[0]) selectBuilding(visibleMatches[0], true);
+                  else if (hiddenMatches[0]) selectBuilding(hiddenMatches[0], false);
+                } else if (e.key === "Escape") {
+                  setQuery("");
+                }
+              }}
+              aria-controls="building-list"
+              style={{
+                flex: "1 1 180px",
+                minWidth: 0,
+                padding: "0.4rem 0.6rem",
+                border: "1px solid #bbb",
+                borderRadius: 4,
+                font: "inherit",
+                fontSize: "0.85rem",
+                background: "#fff",
+                color: "#000",
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => setListOpen((o) => !o)}
+              aria-expanded={showList}
+              aria-controls="building-list"
+              style={{
+                padding: "0.4rem 0.7rem",
+                border: "1px solid #500000",
+                borderRadius: 4,
+                background: showList ? "#500000" : "#fff",
+                color: showList ? "#fff" : "#500000",
+                font: "inherit",
+                fontWeight: 600,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {showList ? "Hide list" : `List buildings (${count})`}
+            </button>
+          </div>
+
+          {showList && (
+            <div
+              id="building-list"
+              style={{
+                maxHeight: 240,
+                overflowY: "auto",
+                background: "#fff",
+                border: "1px solid #d6cfc4",
+                borderRadius: 4,
+              }}
+            >
+              <div aria-live="polite" style={{ padding: "0.35rem 0.6rem", color: "#555" }}>
+                {q
+                  ? `${visibleMatches.length} on the map match “${query.trim()}”`
+                  : `${count} buildings standing between ${sy} and ${ey}`}
+              </div>
+              <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                {visibleMatches.map((m) => (
+                  <li key={m.id}>
+                    <button type="button" className="bf-item" onClick={() => selectBuilding(m, true)}>
+                      <span>{m.title}</span>
+                      <span className="bf-years">{yearsLabel(m)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {hiddenMatches.length > 0 && (
+                <>
+                  <div style={{ padding: "0.35rem 0.6rem", color: "#555", borderTop: "1px solid #e9e4dc" }}>
+                    Outside {sy}–{ey} (selecting one widens the date range)
+                  </div>
+                  <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                    {hiddenMatches.map((m) => (
+                      <li key={m.id}>
+                        <button
+                          type="button"
+                          className="bf-item bf-hidden"
+                          onClick={() => selectBuilding(m, false)}
+                        >
+                          <span>{m.title}</span>
+                          <span className="bf-years">{yearsLabel(m)}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {q && visibleMatches.length === 0 && hiddenMatches.length === 0 && (
+                <div style={{ padding: "0.35rem 0.6rem 0.6rem", color: "#555" }}>
+                  No buildings match.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
+
+// Visually hidden but read by screen readers
+const SR_ONLY: React.CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0,0,0,0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
