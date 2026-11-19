@@ -34,7 +34,48 @@ const HISTORIC_MAPS: { year: number; key: string }[] = [
 ];
 
 // Shown in the fact line or the lead instead of the details list
-const PROMOTED = new Set(["date built", "date razed", "description", "rights", "rights details"]);
+const PROMOTED = new Set(["date built", "date razed", "description", "abstract", "rights", "rights details"]);
+
+// IIIF allows a small set of HTML tags in metadata values (some records wrap
+// their abstract in <p>). Keep those, drop every other tag and all attributes
+// except a safe link href, so catalog HTML renders instead of showing as text.
+const ALLOWED_TAGS = new Set(["a", "b", "br", "em", "i", "p", "small", "span", "strong", "sub", "sup"]);
+
+function escapeText(s: string): string {
+  return s
+    .replace(/&(?!(?:[a-z]+|#\d+|#x[0-9a-f]+);)/gi, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function cleanHtml(value: string): string {
+  let out = "";
+  let last = 0;
+  const tagRe = /<\/?([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g;
+  for (let m: RegExpExecArray | null; (m = tagRe.exec(value)); ) {
+    out += escapeText(value.slice(last, m.index));
+    last = tagRe.lastIndex;
+    const tag = m[1].toLowerCase();
+    if (!ALLOWED_TAGS.has(tag)) continue;
+    const closing = m[0].startsWith("</");
+    if (closing) {
+      if (tag !== "br") out += `</${tag}>`;
+    } else if (tag === "a") {
+      const href = m[2].match(/href\s*=\s*["']([^"']*)["']/i)?.[1] ?? "";
+      out += /^(https?:|mailto:)/i.test(href)
+        ? `<a href="${escapeText(href).replace(/"/g, "&quot;")}" target="_blank" rel="noopener noreferrer">`
+        : "<a>";
+    } else {
+      out += tag === "br" ? "<br />" : `<${tag}>`;
+    }
+  }
+  return out + escapeText(value.slice(last));
+}
+
+/** A catalog value as HTML: rendered if it contains markup, escaped otherwise. */
+function Html({ value, as: Tag = "span", className }: { value: string; as?: any; className?: string }) {
+  return <Tag className={className} dangerouslySetInnerHTML={{ __html: cleanHtml(value) }} />;
+}
 
 function text(value: IntlString): string[] {
   if (!value) return [];
@@ -85,7 +126,8 @@ export default function BuildingFacts({ manifest }: { manifest?: Manifest }) {
   const razedRaw = field("date razed");
   const standing = !razedRaw || razedRaw.toLowerCase() === "present";
   const razed = standing ? null : parseYear(razedRaw);
-  const description = field("description");
+  // Most records have a Description; some have an Abstract instead
+  const description = field("description") ?? field("abstract");
   const rightsLabel = field("rights details");
   const rightsUrl = manifest.rights || field("rights");
 
@@ -114,7 +156,8 @@ export default function BuildingFacts({ manifest }: { manifest?: Manifest }) {
   return (
     <div className="building-facts">
       <p className="building-facts__line">{facts.join(" · ")}</p>
-      {description && <p className="building-facts__lead">{description}</p>}
+      {/* A div, since the value may carry its own <p> */}
+      {description && <Html as="div" className="building-facts__lead" value={description} />}
       {mapHref && (
         <a className="building-facts__map" href={mapHref}>
           <MapIcon />
@@ -128,7 +171,14 @@ export default function BuildingFacts({ manifest }: { manifest?: Manifest }) {
             {details.map((f) => (
               <div key={f.label}>
                 <dt>{f.label}</dt>
-                <dd>{f.values.join("; ")}</dd>
+                <dd>
+                  {f.values.map((v, i) => (
+                    <React.Fragment key={i}>
+                      {i > 0 && "; "}
+                      <Html value={v} />
+                    </React.Fragment>
+                  ))}
+                </dd>
               </div>
             ))}
             {(rightsUrl || rightsLabel) && (

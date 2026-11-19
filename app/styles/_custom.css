@@ -427,3 +427,14 @@
 .related-buildings ul > li::marker {
   content: none;
 }
+
+/* Catalog values may carry their own paragraphs */
+.building-facts__lead p,
+.building-facts__details dd p {
+  margin: 0;
+}
+
+.building-facts__lead p + p,
+.building-facts__details dd p + p {
+  margin-top: 0.75em;
+}
