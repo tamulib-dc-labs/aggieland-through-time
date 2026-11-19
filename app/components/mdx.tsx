@@ -11,6 +11,7 @@ export const components = {
   LandingHero: './LandingHero.tsx',
   LogoStrip: './LogoStrip.tsx',
   ManifestHomepage: './ManifestHomepage.tsx',
+  BuildingFacts: './BuildingFacts.tsx',
 };
 
 // Map browser-only components to their source files; the builder bundles
@@ -21,4 +22,5 @@ export const clientComponents = {
   MapWithDateSlider: './MapWithDateSlider.client.tsx',
   BeforeAfter: './BeforeAfter.client.tsx',
   OpacityCompare: './OpacityCompare.client.tsx',
+  RelatedBuildings: './RelatedBuildings.client.tsx',
 };

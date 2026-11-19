@@ -821,6 +821,9 @@ export default function MapWithDateSlider({
     if (hash.zoom !== undefined && hash.lat !== undefined && hash.lng !== undefined) {
       map.setView([hash.lat, hash.lng], hash.zoom);
       initialBoundsSetRef.current = true;
+      // Arrived from a shared link (e.g. "See it on the campus map"): skip
+      // the page intro and show the map and its slider
+      requestAnimationFrame(() => rootRef.current?.scrollIntoView({ block: "start" }));
     } else if (center && zoom !== undefined) {
       map.setView(center, zoom);
       initialBoundsSetRef.current = true;
@@ -1078,17 +1081,25 @@ export default function MapWithDateSlider({
         in_range: inRange,
       }
     );
-    if (inRange) {
+    // Slide the date range to the building's own lifespan (built → razed, or
+    // → the present), so the map shows what stood around it in its time.
+    // Undated buildings keep the current range.
+    if (m.dateBuilt === null) {
       flyToBuilding(m.id);
       return;
     }
-    // Widen the date range just enough to include it; the marker sync effect
-    // then flies to it
-    // (a building shows when dateBuilt <= endYear and dateRazed >= startYear;
-    // undated ones are always shown, so never land here)
+    const lo = minYearRef.current, hi = maxYearRef.current;
+    const clamp = (y: number) => Math.min(hi, Math.max(lo, y));
+    const nextStart = clamp(m.dateBuilt);
+    const nextEnd = clamp(Math.max(m.dateRazed ?? hi, m.dateBuilt));
+    if (nextStart === startYear && nextEnd === endYear) {
+      flyToBuilding(m.id);
+      return;
+    }
+    // The markers are rebuilt for the new range; the sync effect then flies
     pendingFlyRef.current = m.id;
-    if (m.dateBuilt !== null) setEndYear((e) => Math.max(e ?? m.dateBuilt, m.dateBuilt));
-    if (m.dateRazed !== null) setStartYear((s) => Math.min(s ?? m.dateRazed, m.dateRazed));
+    setStartYear(nextStart);
+    setEndYear(nextEnd);
   }
 
   const q = query.trim().toLowerCase();
@@ -1397,7 +1408,7 @@ export default function MapWithDateSlider({
               {hiddenMatches.length > 0 && (
                 <>
                   <div style={{ padding: "0.35rem 0.6rem", color: "#555", borderTop: "1px solid #e9e4dc" }}>
-                    Outside {sy}–{ey} (selecting one widens the date range)
+                    Outside {sy}–{ey}
                   </div>
                   <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
                     {hiddenMatches.map((m) => (
