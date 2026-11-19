@@ -242,3 +242,45 @@
 .aux-chrome .main-header .identity a {
   gap: 0 !important;
 }
+
+/* ── Map page: lede and "start here" chips ──
+ * Each chip is a link to a saved map view (years, view, overlay in the URL
+ * hash); MapWithDateSlider applies it without reloading the page.
+ */
+.map-lede {
+  margin: 0 0 0.6rem;
+  font-size: 1.05rem;
+}
+
+.map-starts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+}
+
+.map-starts a {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid #500000;
+  border-radius: 999px;
+  background: #fff;
+  color: #500000;
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.map-starts a:hover,
+.map-starts a:focus-visible {
+  background: #500000;
+  color: #fff;
+}
+
+.map-starts a:focus-visible {
+  outline: 2px solid #500000;
+  outline-offset: 2px;
+}

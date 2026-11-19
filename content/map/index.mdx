@@ -4,16 +4,20 @@ title: Mapping the Collection
 
 # Explore Campus Buildings Over Time
 
-Use the slider to move through time and watch the Texas A&M campus take shape — from a handful of structures in 1876 to
-the sprawling research university it became by the late twentieth century. Each marker represents a building in the
-photographic collection.
+<p className="map-lede"><strong>150 years of Aggieland, building by building.</strong> Pick a span of years below the map, or start with one of these:</p>
 
-Click any marker in the map below to browse images and learn more.
-
-
+<nav className="map-starts" aria-label="Places to start">
+  <a href="#years=1876-1876&map=17/30.61560/-96.34100">Campus in 1876</a>
+  <a href="#years=1914-1914&map=17/30.61580/-96.34180&overlays=451d554d53d927da">The 1914 campus map</a>
+  <a href="#years=1933-1933&map=16/30.61610/-96.34120&overlays=66a196ddd627845c">The 1933 campus plan</a>
+  <a href="#years=1969-1969&map=15/30.61490/-96.34170&overlays=7d41ab5ca0cc3c23">Campus in 1969</a>
+  <a href="#map=15/30.61370/-96.34280&base=2">Campus today</a>
+</nav>
 
 <MapWithDateSlider
-  height="560px"
+  height="max(360px, calc(100dvh - 170px))"
+  center={[30.6155, -96.3412]}
+  zoom={16}
   cluster={true}
   maxClusterRadius={200}
   georefAnnotations={[
@@ -86,7 +90,19 @@ Click any marker in the map below to browse images and learn more.
     ]}
 />
 
+## About this map
 
+Each marker is a building in the Texas A&M University Libraries' photographs of campus, placed at its original
+location. The building and demolition dates come from those item records, so the map shows a building only for the
+years it stood. Buildings with no recorded date always appear.
 
-Buildings are plotted at their original locations. Use the layer switcher in the top-right corner of the map to switch
-between base maps, including satellite imagery that shows the campus as it stands today.
+The historic imagery comes from these campus maps and aerial photographs, georeferenced with
+[Allmaps](https://allmaps.org) so they line up with today's streets:
+
+- 1914 — Map of the campus of the A&M College of Texas
+- 1933 — Campus plan
+- About 1950 — Campus view
+- 1969 — Texas A&M University, College Station, main campus
+- About 1980 — Aerial infrared image of College Station
+- 1995 — NAPP aerial photograph of College Station
+- About 1996 — Aerial photograph of College Station

@@ -348,8 +348,13 @@ export default function MapWithDateSlider({
   disableClusteringAtZoom = 19,
   tileLayers,
   georefAnnotations,
+  center,
+  zoom,
 }: {
   height?: string;
+  /** Starting view; without it the map fits every building */
+  center?: [number, number];
+  zoom?: number;
   cluster?: boolean;
   maxClusterRadius?: number;
   disableClusteringAtZoom?: number;
@@ -811,10 +816,13 @@ export default function MapWithDateSlider({
     });
     new ShareControl().addTo(map);
 
-    // Start from the URL hash's view if it has one; otherwise a default view
-    // while data loads, replaced by fitting the markers once they arrive
+    // Starting view: the URL hash's, else the `center`/`zoom` props, else a
+    // placeholder while data loads, replaced by fitting the markers
     if (hash.zoom !== undefined && hash.lat !== undefined && hash.lng !== undefined) {
       map.setView([hash.lat, hash.lng], hash.zoom);
+      initialBoundsSetRef.current = true;
+    } else if (center && zoom !== undefined) {
+      map.setView(center, zoom);
       initialBoundsSetRef.current = true;
     } else {
       map.setView([30.618, -96.336], 15);
@@ -826,6 +834,38 @@ export default function MapWithDateSlider({
       if (layer) map.addLayer(layer);
     });
 
+    // Links on the page that change only the hash (e.g. "Campus in 1933")
+    // reload nothing, so apply them here. Our own replaceState writes don't
+    // fire hashchange.
+    const baseList = layers.map((tl) => baseMapLayers[tl.name]);
+    const onHashChange = () => {
+      const h = readHash();
+      if (h.zoom !== undefined && h.lat !== undefined && h.lng !== undefined) {
+        map.setView([h.lat, h.lng], h.zoom);
+      }
+      const nextBase =
+        h.base !== undefined && Number.isInteger(h.base) && h.base >= 0 && h.base < baseList.length ? h.base : 0;
+      if (baseList.length && nextBase !== baseIndexRef.current) {
+        map.removeLayer(baseList[baseIndexRef.current]);
+        map.addLayer(baseList[nextBase]);
+        baseIndexRef.current = nextBase;
+      }
+      const want = new Set(h.overlays ?? []);
+      georefByKeyRef.current.forEach((layer, key) => {
+        if (want.has(key) && !map.hasLayer(layer)) map.addLayer(layer);
+        else if (!want.has(key) && map.hasLayer(layer)) map.removeLayer(layer);
+      });
+      setOverlayOpacity(h.opacity ?? 100);
+      const lo = minYearRef.current, hi = maxYearRef.current;
+      const clamp = (y: number) => Math.min(hi, Math.max(lo, y));
+      const hasYears = h.start !== undefined && h.end !== undefined && h.start <= h.end;
+      setStartYear(hasYears ? clamp(h.start) : lo);
+      setEndYear(hasYears ? clamp(h.end) : hi);
+      // Bring the map and its slider bar into view together
+      rootRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    };
+    window.addEventListener("hashchange", onHashChange);
+
     map.on("moveend overlayadd overlayremove layeradd layerremove", (e: any) => {
       // Marker layers come and go with the slider; only overlays matter here
       if ((e.type === "layeradd" || e.type === "layerremove") && !georefList.includes(e.layer)) return;
@@ -835,6 +875,7 @@ export default function MapWithDateSlider({
     mapInstanceRef.current = map;
 
     return () => {
+      window.removeEventListener("hashchange", onHashChange);
       map.remove();
       mapInstanceRef.current = null;
       fullscreenButtonRef.current = null;
@@ -1150,7 +1191,7 @@ export default function MapWithDateSlider({
             color: "#333",
           }}
         >
-          <span>Date Range: {minYear} – {maxYear}</span>
+          <span>Drag the handles to choose years</span>
           <span>{count} of {total} items</span>
         </div>
 
