@@ -1253,7 +1253,7 @@ export default function MapWithDateSlider({
           }}
         >
           <span style={{ fontWeight: 600, color: "#000", fontSize: "0.85rem" }}>{sy}</span>
-          <span>{ey - sy} year span</span>
+          <span>{ey === sy ? `Standing in ${sy}` : `${ey - sy} year span`}</span>
           <span style={{ fontWeight: 600, color: "#000", fontSize: "0.85rem" }}>{ey}</span>
         </div>
 
