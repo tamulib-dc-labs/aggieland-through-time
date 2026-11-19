@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { join } from 'path';
 
 const BASE_PATH = process.env.CANOPY_BASE_PATH || '';
@@ -44,4 +45,45 @@ if (BASE_PATH) {
     : '[patch] WARNING: could not locate withBase() pattern in canopy-search-form.js — typeahead URLs may be doubled.');
 } else {
   console.log('[patch] No CANOPY_BASE_PATH set — skipping JS path patch (dev mode).');
+}
+
+// ── 2. Cache-bust the site stylesheet ─────────────────────────────────────────
+//    Canopy links /styles/styles.css with no version, and the CDN in front of
+//    the site caches it for hours, so after a deploy visitors could get new
+//    HTML with old CSS. Append a hash of the stylesheet's contents to every
+//    page's link so the URL changes whenever the CSS does.
+
+//    Production builds only (CANOPY_BASE_PATH set): `npm run dev` also runs
+//    this script, and the dev server needs its pages left as Canopy wrote them.
+
+const siteDir = join(process.cwd(), 'site');
+const cssFile = join(siteDir, 'styles', 'styles.css');
+if (!BASE_PATH) {
+  console.log('[patch] No CANOPY_BASE_PATH set — skipping stylesheet versioning (dev mode).');
+} else if (existsSync(cssFile)) {
+  const cssHash = createHash('sha256').update(readFileSync(cssFile)).digest('hex').slice(0, 10);
+  const linkPattern = /(href="[^"]*\/styles\/styles\.css)(\?v=[^"]*)?"/g;
+
+  const htmlFiles = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (entry.name.endsWith('.html')) htmlFiles.push(p);
+    }
+  };
+  walk(siteDir);
+
+  let pageCount = 0;
+  for (const file of htmlFiles) {
+    const html = readFileSync(file, 'utf8');
+    const patched = html.replace(linkPattern, `$1?v=${cssHash}"`);
+    if (patched !== html) {
+      writeFileSync(file, patched);
+      pageCount++;
+    }
+  }
+  console.log(`[patch] Versioned styles.css (?v=${cssHash}) in ${pageCount} page(s).`);
+} else {
+  console.log('[patch] No site/styles/styles.css found — skipping stylesheet versioning.');
 }
