@@ -349,7 +349,6 @@ export default function MapWithDateSlider({
   tileLayers,
   georefAnnotations,
 }: {
-  iiifContent?: string; // accepted but unused — data comes from static files
   height?: string;
   cluster?: boolean;
   maxClusterRadius?: number;
